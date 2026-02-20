@@ -1,0 +1,18 @@
+"""
+Assetto Corsa Shared Memory Structs — Python ctypes definitions.
+
+These structs mirror the C# StructLayout definitions from the original
+AssettoCorsaSharedMemory library. The game writes raw bytes into named
+shared memory regions, and we overlay these structs on top to read
+the values as named fields.
+
+IMPORTANT: Field order, types, and array sizes MUST exactly match the
+C# originals. One missing or wrong field = every field after it reads garbage.
+
+C# to Python type mapping:
+  C# int              -> ctypes.c_int       (4 bytes)
+  C# float            -> ctypes.c_float     (4 bytes)
+  C# float[N]         -> ctypes.c_float * N (4*N bytes, inline array)
+  C# string (Unicode) -> ctypes.c_wchar * N (2*N bytes, UTF-16 chars)
+  C# enum             -> ctypes.c_int       (4 bytes, enums are ints in memory)
+"""
