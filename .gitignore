@@ -24,3 +24,5 @@ Desktop.ini
 *.egg-info/
 dist/
 build/
+
+reel_script.md
