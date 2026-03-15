@@ -63,11 +63,46 @@ void drawStaticUI() {
   tft.drawText(90, 85, "BRK", COLOR_LIGHTGRAY);
   
   // Tyres Box
-  tft.drawRectangle(5, 130, 170, 215, COLOR_DARKGRAY);
+  tft.drawRectangle(5, 130, 170, 218, COLOR_DARKGRAY);
   tft.drawText(10, 135, "TYRES C", COLOR_LIGHTGRAY);
   
-  // Car Outline (Crude top-down representation)
-  tft.drawRectangle(70, 150, 105, 205, COLOR_GRAY); // Body
+  // F1 Car Outline
+  drawCarOutline();
+}
+
+void drawCarOutline() {
+  uint16_t c = COLOR_WHITE;
+  
+  // Nose Cone (Narrower)
+  tft.drawRectangle(86, 142, 90, 156, c);
+  
+  // Front Wing (Narrower)
+  tft.drawRectangle(74, 142, 102, 145, c);
+
+  // Front Wheels (Closer to body)
+  tft.drawRectangle(66, 144, 72, 156, c);
+  tft.drawRectangle(104, 144, 110, 156, c);
+
+  // Front Suspension (Shorter)
+  tft.drawLine(72, 150, 86, 150, c);
+  tft.drawLine(104, 150, 90, 150, c);
+
+  // Main Body / Cockpit & Sidepods (Narrower)
+  tft.drawRectangle(78, 156, 98, 184, c);
+
+  // Engine / Gearbox (Narrower)
+  tft.drawRectangle(84, 184, 92, 194, c);
+
+  // Rear Wheels (Closer to body)
+  tft.drawRectangle(64, 182, 70, 196, c);
+  tft.drawRectangle(106, 182, 112, 196, c);
+
+  // Rear Suspension (Shorter)
+  tft.drawLine(70, 189, 84, 189, c);
+  tft.drawLine(106, 189, 92, 189, c);
+
+  // Rear Wing (Narrower)
+  tft.drawRectangle(76, 194, 100, 198, c);
 }
 
 void loop() {
@@ -89,31 +124,33 @@ void parseData(String data) {
   int i_S = data.indexOf(",S");
   int i_L = data.indexOf(",L");
   int i_B = data.indexOf(",B");
-  int i_T = data.indexOf(",T");
-  
-  if(i_M > 0 && i_G > 0 && i_S > 0 && i_L > 0 && i_B > 0 && i_T > 0) {
-    current_rpm = data.substring(1, i_M).toInt();
-    max_rpm = data.substring(i_M + 2, i_G).toInt();
-    if(max_rpm == 0) max_rpm = 9000;
+    int i_T = data.indexOf(",T");
+    int i_F = data.indexOf(",F");
     
-    current_gear_str = data.substring(i_G + 2, i_S);
-    current_speed = data.substring(i_S + 2, i_L).toInt();
-    current_laptime = data.substring(i_L + 2, i_B);
-    current_brake = data.substring(i_B + 2, i_T).toFloat();
-    
-    // Parse Tyres (FL,FR,RL,RR) e.g., "T85.5,86.2,90.1,91.0"
-    String tyreStr = data.substring(i_T + 2);
-    int t1 = tyreStr.indexOf(',');
-    int t2 = tyreStr.indexOf(',', t1+1);
-    int t3 = tyreStr.indexOf(',', t2+1);
-    
-    if(t1>0 && t2>0 && t3>0) {
-      t_FL = tyreStr.substring(0, t1).toFloat();
-      t_FR = tyreStr.substring(t1+1, t2).toFloat();
-      t_RL = tyreStr.substring(t2+1, t3).toFloat();
-      t_RR = tyreStr.substring(t3+1).toFloat();
+    if(i_M > 0 && i_G > 0 && i_S > 0 && i_L > 0 && i_B > 0 && i_T > 0) {
+      current_rpm = data.substring(1, i_M).toInt();
+      max_rpm = data.substring(i_M + 2, i_G).toInt();
+      if(max_rpm == 0) max_rpm = 9000;
+      
+      current_gear_str = data.substring(i_G + 2, i_S);
+      current_speed = data.substring(i_S + 2, i_L).toInt();
+      current_laptime = data.substring(i_L + 2, i_B);
+      current_brake = data.substring(i_B + 2, i_T).toFloat();
+      
+      // Parse Tyres (FL,FR,RL,RR) e.g., "T85.5,86.2,90.1,91.0"
+      String tyreStr = data.substring(i_T + 2, (i_F > 0) ? i_F : data.length());
+      int t1 = tyreStr.indexOf(',');
+      int t2 = tyreStr.indexOf(',', t1+1);
+      int t3 = tyreStr.indexOf(',', t2+1);
+      
+      if(t1>0 && t2>0 && t3>0) {
+        t_FL = tyreStr.substring(0, t1).toFloat();
+        t_FR = tyreStr.substring(t1+1, t2).toFloat();
+        t_RL = tyreStr.substring(t2+1, t3).toFloat();
+        t_RR = tyreStr.substring(t3+1).toFloat();
+      }
+
     }
-  }
 }
 
 // Map value to color (Cold=Blue, Good=Green, Warm=Yellow, Hot=Red)
@@ -170,26 +207,30 @@ void updateDynamicUI() {
   
   // --- 5. TYRES ---
   tft.setFont(Terminal6x8);
-  
-  // Draw colored rectangles for tyres and text beside them
-  
+
+  // Custom temp logic for simple colors (user request: blue < optimal, green > optimal)
+  auto getSimpleTempColor = [](float t) -> uint16_t {
+    if(t < 80.0) return COLOR_BLUE; // Below push temps
+    return COLOR_GREEN;             // Above/At push temps
+  };
+
   // FL Tyre
-  tft.fillRectangle(14, 150, 24, 170, getTyreColor(t_FL));
-  tft.fillRectangle(28, 155, 55, 165, COLOR_BLACK);
-  tft.drawText(28, 155, String((int)t_FL), COLOR_WHITE);
+  tft.fillRectangle(67, 145, 71, 155, getSimpleTempColor(t_FL)); 
+  tft.fillRectangle(34, 145, 64, 155, COLOR_BLACK); // Text bg
+  tft.drawText(34, 145, String((int)t_FL) + "c", getSimpleTempColor(t_FL));
 
   // FR Tyre
-  tft.fillRectangle(150, 150, 160, 170, getTyreColor(t_FR));
-  tft.fillRectangle(120, 155, 145, 165, COLOR_BLACK);
-  tft.drawText(120, 155, String((int)t_FR), COLOR_WHITE);
+  tft.fillRectangle(105, 145, 109, 155, getSimpleTempColor(t_FR)); 
+  tft.fillRectangle(112, 145, 142, 155, COLOR_BLACK); // Text bg
+  tft.drawText(112, 145, String((int)t_FR) + "c", getSimpleTempColor(t_FR));
 
   // RL Tyre
-  tft.fillRectangle(14, 180, 24, 200, getTyreColor(t_RL));
-  tft.fillRectangle(28, 185, 55, 195, COLOR_BLACK);
-  tft.drawText(28, 185, String((int)t_RL), COLOR_WHITE);
+  tft.fillRectangle(65, 183, 69, 195, getSimpleTempColor(t_RL)); 
+  tft.fillRectangle(32, 185, 62, 195, COLOR_BLACK); // Text bg
+  tft.drawText(32, 185, String((int)t_RL) + "c", getSimpleTempColor(t_RL));
 
   // RR Tyre
-  tft.fillRectangle(150, 180, 160, 200, getTyreColor(t_RR));
-  tft.fillRectangle(120, 185, 145, 195, COLOR_BLACK);
-  tft.drawText(120, 185, String((int)t_RR), COLOR_WHITE);
+  tft.fillRectangle(107, 183, 111, 195, getSimpleTempColor(t_RR)); 
+  tft.fillRectangle(114, 185, 144, 195, COLOR_BLACK); // Text bg
+  tft.drawText(114, 185, String((int)t_RR) + "c", getSimpleTempColor(t_RR));
 }

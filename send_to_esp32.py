@@ -53,11 +53,15 @@ def main():
                 t_fr = physics.TyreCoreTemperature[1]
                 t_rl = physics.TyreCoreTemperature[2]
                 t_rr = physics.TyreCoreTemperature[3]
+                
+                # Fuel
+                fuel = physics.Fuel
+                max_fuel = static.MaxFuel
 
                 # Format payload matching Arduino parse logic:
-                # R<rpm>,M<max_rpm>,G<gear_str>,S<speed>,L<laptime>,B<brake>,T<fl,fr,rl,rr>\n
+                # R<rpm>,M<max_rpm>,G<gear_str>,S<speed>,L<laptime>,B<brake>,T<fl,fr,rl,rr>,F<fuel,max_fuel>\n
                 
-                payload = f"R{rpm},M{_max_rpm},G{gear_str},S{speed},L{laptime},B{brake:.2f},T{t_fl:.1f},{t_fr:.1f},{t_rl:.1f},{t_rr:.1f}\n"
+                payload = f"R{rpm},M{_max_rpm},G{gear_str},S{speed},L{laptime},B{brake:.2f},T{t_fl:.1f},{t_fr:.1f},{t_rl:.1f},{t_rr:.1f},F{fuel:.1f},{max_fuel:.1f}\n"
                 
                 esp32.write(payload.encode('ascii'))
                 print(f"Sent: {payload.strip()}")
