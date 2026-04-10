@@ -58,10 +58,14 @@ def main():
                 fuel = physics.Fuel
                 max_fuel = static.MaxFuel
 
+                # G-Forces: AccG[0]=lateral, AccG[2]=longitudinal
+                g_lat = physics.AccG[0]
+                g_lon = physics.AccG[2]
+
                 # Format payload matching Arduino parse logic:
-                # R<rpm>,M<max_rpm>,G<gear_str>,S<speed>,L<laptime>,B<brake>,T<fl,fr,rl,rr>,F<fuel,max_fuel>\n
+                # R<rpm>,M<max_rpm>,G<gear_str>,S<speed>,L<laptime>,B<brake>,T<fl,fr,rl,rr>,F<fuel,max_fuel>,A<g_lat,g_lon>\n
                 
-                payload = f"R{rpm},M{_max_rpm},G{gear_str},S{speed},L{laptime},B{brake:.2f},T{t_fl:.1f},{t_fr:.1f},{t_rl:.1f},{t_rr:.1f},F{fuel:.1f},{max_fuel:.1f}\n"
+                payload = f"R{rpm},M{_max_rpm},G{gear_str},S{speed},L{laptime},B{brake:.2f},T{t_fl:.1f},{t_fr:.1f},{t_rl:.1f},{t_rr:.1f},F{fuel:.1f},{max_fuel:.1f},A{g_lat:.2f},{g_lon:.2f}\n"
                 
                 esp32.write(payload.encode('ascii'))
                 print(f"Sent: {payload.strip()}")

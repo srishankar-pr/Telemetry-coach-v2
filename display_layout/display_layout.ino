@@ -1,6 +1,9 @@
 #include "SPI.h"
 #include "TFT_22_ILI9225.h"
 
+// GFX font only for gear display (supports both letters and numbers cleanly)
+#include <../fonts/FreeSansBold18pt7b.h>
+
 // ESP32 VSPI Pin definitions
 #define TFT_RST 4
 #define TFT_RS  2
@@ -12,7 +15,7 @@
 // Initialize display
 TFT_22_ILI9225 tft = TFT_22_ILI9225(TFT_RST, TFT_RS, TFT_CS, TFT_LED);
 
-// Telemetry State
+// ===================== TELEMETRY STATE =====================
 int current_rpm = 0;
 int max_rpm = 9000;
 String current_gear_str = "N";
@@ -20,28 +23,95 @@ int current_speed = 0;
 float current_brake = 0.0;
 float t_FL = 0, t_FR = 0, t_RL = 0, t_RR = 0;
 String current_laptime = "0:00.000";
+float g_lat = 0.0;   // lateral G-force (left/right)
+float g_lon = 0.0;   // longitudinal G-force (accel/brake)
 
-// Formatting helpers
-String padLeft(String str, int len, char padChar=' ') {
-  while(str.length() < len) str = String(padChar) + str;
-  return str;
-}
+// Previous G-force dot position for flicker-free erase
+int prev_gx = -1;
+int prev_gy = -1;
 
+// G-Force graph constants
+#define GF_CX 133     // center X of G-force graph
+#define GF_CY 178     // center Y
+#define GF_R  30      // radius of the graph circle
+#define GF_MAX_G 3.0  // max G-force shown on graph
+
+// ===================== SETUP =====================
 void setup() {
   Serial.begin(115200);
-  Serial.setTimeout(10); // Fast timeout for responsiveness
+  Serial.setTimeout(10);
   
   tft.begin();
-  tft.setOrientation(0); // 0 = Portrait (Vertical) usually 176x220
+  tft.setOrientation(0); // Portrait 176x220
   tft.clear();
   
   tft.setFont(Terminal12x16);
   tft.drawText(10, 100, "WAITING DATA", COLOR_WHITE);
 
-  // Draw static UI elements once
   drawStaticUI();
 }
 
+// ===================== LOOP =====================
+void loop() {
+  if (Serial.available() > 0) {
+    String data = Serial.readStringUntil('\n'); 
+    
+    if (data.startsWith("R")) {
+      parseData(data);
+      updateDynamicUI();
+    }
+  }
+}
+
+// ===================== DATA PARSER =====================
+void parseData(String data) {
+  int i_M = data.indexOf(",M");
+  int i_G = data.indexOf(",G");
+  int i_S = data.indexOf(",S");
+  int i_L = data.indexOf(",L");
+  int i_B = data.indexOf(",B");
+  int i_T = data.indexOf(",T");
+  int i_F = data.indexOf(",F");
+  int i_A = data.indexOf(",A");
+    
+  if(i_M > 0 && i_G > 0 && i_S > 0 && i_L > 0 && i_B > 0 && i_T > 0) {
+    current_rpm = data.substring(1, i_M).toInt();
+    max_rpm = data.substring(i_M + 2, i_G).toInt();
+    if(max_rpm == 0) max_rpm = 9000;
+      
+    current_gear_str = data.substring(i_G + 2, i_S);
+    current_speed = data.substring(i_S + 2, i_L).toInt();
+    current_laptime = data.substring(i_L + 2, i_B);
+    current_brake = data.substring(i_B + 2, i_T).toFloat();
+      
+    // Parse Tyres (FL,FR,RL,RR)
+    String tyreStr = data.substring(i_T + 2, (i_F > 0) ? i_F : ((i_A > 0) ? i_A : data.length()));
+    int t1 = tyreStr.indexOf(',');
+    int t2 = tyreStr.indexOf(',', t1+1);
+    int t3 = tyreStr.indexOf(',', t2+1);
+      
+    if(t1>0 && t2>0 && t3>0) {
+      t_FL = tyreStr.substring(0, t1).toFloat();
+      t_FR = tyreStr.substring(t1+1, t2).toFloat();
+      t_RL = tyreStr.substring(t2+1, t3).toFloat();
+      t_RR = tyreStr.substring(t3+1).toFloat();
+    }
+
+    // Parse G-force: A<lateral>,<longitudinal>
+    if(i_A > 0) {
+      String gStr = data.substring(i_A + 2);
+      int gComma = gStr.indexOf(',');
+      if(gComma > 0) {
+        g_lat = gStr.substring(0, gComma).toFloat();
+        g_lon = gStr.substring(gComma + 1).toFloat();
+      }
+    }
+  }
+}
+
+// =========================================================
+//  RACE HUD UI
+// =========================================================
 void drawStaticUI() {
   tft.clear();
   tft.setFont(Terminal6x8);
@@ -62,111 +132,39 @@ void drawStaticUI() {
   tft.drawRectangle(85, 80, 170, 120, COLOR_DARKGRAY);
   tft.drawText(90, 85, "BRK", COLOR_LIGHTGRAY);
   
-  // Tyres Box
-  tft.drawRectangle(5, 130, 170, 218, COLOR_DARKGRAY);
-  tft.drawText(10, 135, "TYRES C", COLOR_LIGHTGRAY);
+  // --- Bottom Left: Tyres (compact 2x2 grid) ---
+  tft.drawRectangle(5, 130, 95, 218, COLOR_DARKGRAY);
+  tft.drawText(10, 135, "TYRES", COLOR_LIGHTGRAY);
+  // Labels for the 2x2 grid
+  tft.drawText(10, 150, "FL", COLOR_LIGHTGRAY);
+  tft.drawText(52, 150, "FR", COLOR_LIGHTGRAY);
+  tft.drawText(10, 190, "RL", COLOR_LIGHTGRAY);
+  tft.drawText(52, 190, "RR", COLOR_LIGHTGRAY);
+
+  // --- Bottom Right: G-Force graph ---
+  tft.drawRectangle(100, 130, 170, 218, COLOR_DARKGRAY);
+  tft.drawText(105, 135, "G-FORCE", COLOR_LIGHTGRAY);
   
-  // F1 Car Outline
-  drawCarOutline();
+  // Draw crosshair circle and lines
+  drawGForceStatic();
 }
 
-void drawCarOutline() {
-  uint16_t c = COLOR_WHITE;
-  
-  // Nose Cone (Narrower)
-  tft.drawRectangle(86, 142, 90, 156, c);
-  
-  // Front Wing (Narrower)
-  tft.drawRectangle(74, 142, 102, 145, c);
-
-  // Front Wheels (Closer to body)
-  tft.drawRectangle(66, 144, 72, 156, c);
-  tft.drawRectangle(104, 144, 110, 156, c);
-
-  // Front Suspension (Shorter)
-  tft.drawLine(72, 150, 86, 150, c);
-  tft.drawLine(104, 150, 90, 150, c);
-
-  // Main Body / Cockpit & Sidepods (Narrower)
-  tft.drawRectangle(78, 156, 98, 184, c);
-
-  // Engine / Gearbox (Narrower)
-  tft.drawRectangle(84, 184, 92, 194, c);
-
-  // Rear Wheels (Closer to body)
-  tft.drawRectangle(64, 182, 70, 196, c);
-  tft.drawRectangle(106, 182, 112, 196, c);
-
-  // Rear Suspension (Shorter)
-  tft.drawLine(70, 189, 84, 189, c);
-  tft.drawLine(106, 189, 92, 189, c);
-
-  // Rear Wing (Narrower)
-  tft.drawRectangle(76, 194, 100, 198, c);
-}
-
-void loop() {
-  // Check if Python script sent data over USB
-  // Format: R<rpm>,M<max_rpm>,G<gear_str>,S<speed>,L<laptime>,B<brake>,T<fl,fr,rl,rr>\n
-  if (Serial.available() > 0) {
-    String data = Serial.readStringUntil('\n'); 
-    
-    if (data.startsWith("R")) {
-      parseData(data);
-      updateDynamicUI();
-    }
-  }
-}
-
-void parseData(String data) {
-  int i_M = data.indexOf(",M");
-  int i_G = data.indexOf(",G");
-  int i_S = data.indexOf(",S");
-  int i_L = data.indexOf(",L");
-  int i_B = data.indexOf(",B");
-    int i_T = data.indexOf(",T");
-    int i_F = data.indexOf(",F");
-    
-    if(i_M > 0 && i_G > 0 && i_S > 0 && i_L > 0 && i_B > 0 && i_T > 0) {
-      current_rpm = data.substring(1, i_M).toInt();
-      max_rpm = data.substring(i_M + 2, i_G).toInt();
-      if(max_rpm == 0) max_rpm = 9000;
-      
-      current_gear_str = data.substring(i_G + 2, i_S);
-      current_speed = data.substring(i_S + 2, i_L).toInt();
-      current_laptime = data.substring(i_L + 2, i_B);
-      current_brake = data.substring(i_B + 2, i_T).toFloat();
-      
-      // Parse Tyres (FL,FR,RL,RR) e.g., "T85.5,86.2,90.1,91.0"
-      String tyreStr = data.substring(i_T + 2, (i_F > 0) ? i_F : data.length());
-      int t1 = tyreStr.indexOf(',');
-      int t2 = tyreStr.indexOf(',', t1+1);
-      int t3 = tyreStr.indexOf(',', t2+1);
-      
-      if(t1>0 && t2>0 && t3>0) {
-        t_FL = tyreStr.substring(0, t1).toFloat();
-        t_FR = tyreStr.substring(t1+1, t2).toFloat();
-        t_RL = tyreStr.substring(t2+1, t3).toFloat();
-        t_RR = tyreStr.substring(t3+1).toFloat();
-      }
-
-    }
-}
-
-// Map value to color (Cold=Blue, Good=Green, Warm=Yellow, Hot=Red)
-uint16_t getTyreColor(float temp) {
-  if(temp < 60) return COLOR_BLUE;
-  if(temp < 85) return COLOR_GREEN;
-  if(temp < 105) return COLOR_YELLOW;
-  return COLOR_RED;
+void drawGForceStatic() {
+  // Outer circle
+  tft.drawCircle(GF_CX, GF_CY, GF_R, COLOR_DARKGRAY);
+  // Inner circle (1G reference)
+  tft.drawCircle(GF_CX, GF_CY, GF_R / 3, COLOR_DARKGRAY);
+  // Crosshair lines
+  tft.drawLine(GF_CX - GF_R, GF_CY, GF_CX + GF_R, GF_CY, COLOR_DARKGRAY);  // horizontal
+  tft.drawLine(GF_CX, GF_CY - GF_R, GF_CX, GF_CY + GF_R, COLOR_DARKGRAY);  // vertical
 }
 
 void updateDynamicUI() {
-  // --- 1. RPM BAR (Horizontal at top using small circles) ---
+  // --- 1. RPM BAR ---
   float rpm_ratio = (float)current_rpm / max_rpm;
   if(rpm_ratio > 1.0) rpm_ratio = 1.0;
   
-  tft.fillRectangle(5, 15, 171, 26, COLOR_BLACK); // Clear entire RPM bar area
+  tft.fillRectangle(5, 15, 171, 26, COLOR_BLACK); 
   int num_circles = 15;
   int active_circles = (int)(rpm_ratio * num_circles);
   
@@ -181,56 +179,104 @@ void updateDynamicUI() {
       if(i >= num_circles * 0.9) c_color = COLOR_RED;
       tft.fillCircle(cx, cy, r, c_color);
     } else {
-      tft.fillCircle(cx, cy, r, COLOR_DARKGRAY); // Inactive state
+      tft.fillCircle(cx, cy, r, COLOR_DARKGRAY);
     }
   }
   
-  // --- 2. GEAR & SPEED ---
-  tft.setFont(Trebuchet_MS16x21); // Big font for gear
-  tft.fillRectangle(25, 45, 55, 90, COLOR_BLACK); // Clear gear background
-  tft.drawText(30, 55, current_gear_str, COLOR_WHITE);
+  // --- 2. GEAR (GFX font) & SPEED ---
+  tft.fillRectangle(15, 45, 65, 90, COLOR_BLACK); 
+  tft.setGFXFont(&FreeSansBold18pt7b);
+  tft.drawGFXText(25, 82, current_gear_str, COLOR_WHITE);
   
-  tft.setFont(Terminal6x8); // Font for speed
-  tft.fillRectangle(10, 105, 70, 115, COLOR_BLACK); // Clear speed background
+  tft.setFont(Terminal6x8); 
+  tft.fillRectangle(10, 105, 70, 115, COLOR_BLACK); 
   tft.drawText(20, 105, String(current_speed), COLOR_WHITE);
   
   // --- 3. LAPTIME ---
-  tft.setFont(Terminal6x8); // Smaller font
+  tft.setFont(Terminal6x8); 
   tft.fillRectangle(95, 45, 165, 65, COLOR_BLACK);
   tft.drawText(95, 50, current_laptime, COLOR_YELLOW);
   
   // --- 4. BRAKE PRESSURE BAR ---
   int max_brk_width = 70;
-  int brk_width = (int)(current_brake * max_brk_width); // brake is 0.0 to 1.0
+  int brk_width = (int)(current_brake * max_brk_width); 
   tft.fillRectangle(90, 100, 90 + brk_width, 110, COLOR_RED);
   tft.fillRectangle(90 + brk_width + 1, 100, 90 + max_brk_width, 110, COLOR_BLACK);
   
-  // --- 5. TYRES ---
+  // --- 5. TYRES (compact 2x2 in bottom-left) ---
   tft.setFont(Terminal6x8);
 
-  // Custom temp logic for simple colors (user request: blue < optimal, green > optimal)
   auto getSimpleTempColor = [](float t) -> uint16_t {
-    if(t < 80.0) return COLOR_BLUE; // Below push temps
-    return COLOR_GREEN;             // Above/At push temps
+    if(t < 75.0) return COLOR_BLUE; 
+    return COLOR_GREEN;             
   };
 
-  // FL Tyre
-  tft.fillRectangle(67, 145, 71, 155, getSimpleTempColor(t_FL)); 
-  tft.fillRectangle(34, 145, 64, 155, COLOR_BLACK); // Text bg
-  tft.drawText(34, 145, String((int)t_FL) + "c", getSimpleTempColor(t_FL));
+  // FL
+  tft.fillRectangle(10, 160, 45, 170, COLOR_BLACK);
+  tft.fillRectangle(10, 172, 45, 177, getSimpleTempColor(t_FL));
+  tft.drawText(10, 162, String((int)t_FL) + "c", getSimpleTempColor(t_FL));
 
-  // FR Tyre
-  tft.fillRectangle(105, 145, 109, 155, getSimpleTempColor(t_FR)); 
-  tft.fillRectangle(112, 145, 142, 155, COLOR_BLACK); // Text bg
-  tft.drawText(112, 145, String((int)t_FR) + "c", getSimpleTempColor(t_FR));
+  // FR
+  tft.fillRectangle(52, 160, 88, 170, COLOR_BLACK);
+  tft.fillRectangle(52, 172, 88, 177, getSimpleTempColor(t_FR));
+  tft.drawText(52, 162, String((int)t_FR) + "c", getSimpleTempColor(t_FR));
 
-  // RL Tyre
-  tft.fillRectangle(65, 183, 69, 195, getSimpleTempColor(t_RL)); 
-  tft.fillRectangle(32, 185, 62, 195, COLOR_BLACK); // Text bg
-  tft.drawText(32, 185, String((int)t_RL) + "c", getSimpleTempColor(t_RL));
+  // RL
+  tft.fillRectangle(10, 200, 45, 210, COLOR_BLACK);
+  tft.fillRectangle(10, 212, 45, 216, getSimpleTempColor(t_RL));
+  tft.drawText(10, 202, String((int)t_RL) + "c", getSimpleTempColor(t_RL));
 
-  // RR Tyre
-  tft.fillRectangle(107, 183, 111, 195, getSimpleTempColor(t_RR)); 
-  tft.fillRectangle(114, 185, 144, 195, COLOR_BLACK); // Text bg
-  tft.drawText(114, 185, String((int)t_RR) + "c", getSimpleTempColor(t_RR));
+  // RR
+  tft.fillRectangle(52, 200, 88, 210, COLOR_BLACK);
+  tft.fillRectangle(52, 212, 88, 216, getSimpleTempColor(t_RR));
+  tft.drawText(52, 202, String((int)t_RR) + "c", getSimpleTempColor(t_RR));
+
+  // --- 6. G-FORCE GRAPH (bottom-right) ---
+  updateGForce();
+}
+
+void updateGForce() {
+  // Erase previous dot
+  if(prev_gx >= 0 && prev_gy >= 0) {
+    tft.fillCircle(prev_gx, prev_gy, 3, COLOR_BLACK);
+    
+    // Redraw any crosshair lines/circles the dot may have overlapped
+    // Only redraw the small area around the old dot
+    // Horizontal crosshair segment near old dot
+    if(abs(prev_gy - GF_CY) <= 3) {
+      tft.drawLine(prev_gx - 4, GF_CY, prev_gx + 4, GF_CY, COLOR_DARKGRAY);
+    }
+    // Vertical crosshair segment near old dot
+    if(abs(prev_gx - GF_CX) <= 3) {
+      tft.drawLine(GF_CX, prev_gy - 4, GF_CX, prev_gy + 4, COLOR_DARKGRAY);
+    }
+  }
+
+  // Calculate new dot position
+  // Lateral G → X axis (positive = right turn = dot goes right)
+  // Longitudinal G → Y axis (positive = braking = dot goes up)
+  float scale = (float)GF_R / GF_MAX_G;
+  int dot_x = GF_CX + (int)(g_lat * scale);
+  int dot_y = GF_CY - (int)(g_lon * scale);  // inverted: braking (positive) goes up
+
+  // Clamp to circle bounds
+  float dist = sqrt((float)(dot_x - GF_CX) * (dot_x - GF_CX) + (float)(dot_y - GF_CY) * (dot_y - GF_CY));
+  if(dist > GF_R - 3) {
+    float ratio = (GF_R - 3) / dist;
+    dot_x = GF_CX + (int)((dot_x - GF_CX) * ratio);
+    dot_y = GF_CY + (int)((dot_y - GF_CY) * ratio);
+  }
+
+  // Color based on total G magnitude
+  float g_total = sqrt(g_lat * g_lat + g_lon * g_lon);
+  uint16_t dotColor = COLOR_GREEN;
+  if(g_total > 1.5) dotColor = COLOR_YELLOW;
+  if(g_total > 2.5) dotColor = COLOR_RED;
+
+  // Draw new dot
+  tft.fillCircle(dot_x, dot_y, 3, dotColor);
+
+  // Store for next erase
+  prev_gx = dot_x;
+  prev_gy = dot_y;
 }
